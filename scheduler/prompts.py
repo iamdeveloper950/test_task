@@ -1,4 +1,4 @@
-"""Prompt construction for the scheduling agent."""
+"""Prompt construction for the scheduling assistant."""
 
 import json
 
@@ -17,10 +17,16 @@ Here is the full employee directory:
 You can call these tools:
 - list_people(): returns the employee directory.
 - get_busy_times(person, date): returns a person's busy blocks. `person` is
-  the person's id; `date` is YYYY-MM-DD.
-- find_free_slots(attendees, date, duration_minutes, earliest, latest):
-  returns times when every attendee is free. `attendees` is a list of ids.
-  `earliest` and `latest` are optional HH:MM bounds.
+  the person's ID; `date` is YYYY-MM-DD.
+- find_free_slots(attendees, date, duration_minutes, earliest, latest, limit):
+  returns times when every attendee is free. `attendees` are employee IDs.
+  `duration_minutes` must be a positive integer. `limit` is optional;
+  when omitted, all matching windows are returned.
+
+Only use employee IDs from the directory. If a requested person cannot be
+resolved to a directory entry, tell the user instead of guessing, substituting,
+or silently omitting that person. Treat tool results as the source of truth
+for available times; never invent availability.
 
 Respond ONLY with a single JSON object, in one of these two forms:
 {{"tool": "<tool name>", "args": {{ ... }}}}

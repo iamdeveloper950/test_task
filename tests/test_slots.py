@@ -33,3 +33,14 @@ def test_combine_availability():
 def test_find_free_windows():
     free = [False, True, True, True, False, True] + [False] * 10
     assert find_free_windows(free, 2) == [1, 2]
+
+
+def test_final_window_ending_at_end_slot_is_included():
+    assert find_free_windows([True, True, True], 2, end_slot=3) == [0, 1]
+
+
+def test_free_window_rejects_zero_duration():
+    import pytest
+
+    with pytest.raises(ValueError):
+        find_free_windows([True, True], 0)

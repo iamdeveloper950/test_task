@@ -3,18 +3,18 @@
 ## Problems found
 
 - **The final valid window was skipped.** `find_free_windows` used an exclusive upper bound that omitted a candidate ending exactly at `end_slot`. Fixed the range and updated the existing afternoon test to include the valid 16:30–17:00 option. The test change is intentional: the old expected result encoded the bug.
-- **Durations were rounded down.** A 45-minute request was treated as one 30-minute slot. Durations are now validated as positive integers, the availability check conservatively reserves every 30-minute slot touched, and the returned end time reflects the requested duration.
+- **Duration checks could miss valid meetings or misrepresent conflicts.** A 45-minute request was treated as one 30-minute slot. The search now keeps candidate starts aligned to the 30-minute grid but checks actual busy intervals at minute precision using half-open intervals. The exact requested end time is returned, so a meeting ending at 13:45 is allowed when another starts at 13:45, while an event starting at 13:44 blocks it.
 - **Unknown employees appeared free.** Missing calendar entries defaulted to no busy blocks, so an unknown ID could look available. Tool calls now resolve every attendee against the directory and fail explicitly for unknown IDs. Empty attendee lists are rejected.
 - **Bounds and inputs were not validated.** Added validation for clock values, dates, duration, optional result limits, and inconsistent availability inputs. Earliest bounds are aligned inward so results cannot start before the requested time.
 - **The agent trusted every model response.** Added checks for malformed JSON, unexpected response shapes, unknown tools, invalid arguments, and tool errors. Unknown-person errors stop the request instead of allowing a later model response to quietly proceed.
 - **The agent loop was unbounded.** Added a configurable maximum number of turns and a controlled message when the limit is reached.
-- **Final answers could claim unverified times or attendees.** The agent now validates complete start/end pairs against an exact window returned by the most recent availability query, checks proposed start times, and rejects known or likely named attendees who were not in the verified attendee set. Malformed tool results are not accepted as availability evidence. These checks are deliberately conservative: ambiguous phrasing returns a safe failure rather than an unsupported confirmation.
+- **Model-generated final answers could invent people or time ranges.** Regex-based natural-language checks cannot reliably catch every possible phrasing. After a successful availability query, the agent now ignores the model's free-form confirmation and renders the response from validated attendee IDs, date, duration, and exact windows. This means an unverified name in the model's final text cannot leak into the meeting confirmation. Before using results, the agent checks the full start/end pair, requested duration and bounds, slot-grid alignment, known attendees, and exact overlap against each attendee's source calendar. If tool output fails validation, it is not used as availability evidence.
 - **A model call could block indefinitely.** The agent now bounds each synchronous model call with a configurable timeout; the OpenAI-compatible HTTP adapter also passes its timeout to `urlopen`. A timed-out Python thread cannot be forcibly killed, so the worker is daemonized and further calls on that agent are rejected while the timed-out call remains stuck.
 
 ## My addition
 
 - Added an optional `limit` argument to `find_free_slots`. It is applied only after all matching windows are computed and ordered, so default behavior still returns every valid window. This helps callers request a concise shortlist without silently truncating normal results.
-- Added tests for result limiting, ordering, unknown attendees, duration handling, malformed model/tool responses, exact time-range verification, unverified attendee claims, working-day boundaries, model-call timeouts, and loop termination.
+- Added tests for result limiting, ordering, unknown attendees, minute-precision overlap boundaries, duration handling, malformed model/tool responses, spoofed availability results, deterministic final rendering, working-day boundaries, model-call timeouts, and loop termination.
 
 ## How I used AI tools
 
@@ -24,8 +24,8 @@
 ## What I would do next
 
 - Add property-based tests for combinations of busy intervals, duration lengths, and day boundaries.
-- Improve natural-language entity detection beyond common attendee-claim patterns; free-text name detection cannot guarantee perfect coverage for every phrasing.
-- Add per-tool execution timeouts if tools become blocking or perform network I/O.
+- If the product later needs richer conversational confirmations, build them from a typed verified result object rather than allowing free-form model text to assert attendees or availability.
+- Add per-tool execution timeouts if tools become blocking or perform network I/O. The model-call timeout cannot forcibly terminate a synchronous Python thread; the daemon worker can continue until the underlying call returns.
 
 ## Deliberately left alone
 

@@ -1,9 +1,7 @@
 """Tools the agent can call. Each tool takes the Store plus keyword arguments."""
 
 from datetime import date as date_type
-from .slots import (SLOT_MINUTES, SLOTS_PER_DAY, availability_from_busy,
-                    combine_availability, find_free_windows, minutes_to_time,
-                    slot_to_time, time_to_minutes, time_to_slot, time_to_slot_ceil)
+from .slots import SLOT_MINUTES, minutes_to_time, time_to_minutes
 from .store import Store
 
 
@@ -45,7 +43,12 @@ def get_busy_times(store: Store, person: str, date: str) -> list[dict]:
 def find_free_slots(store: Store, attendees: list[str], date: str,
                     duration_minutes: int, earliest: str | None = None,
                     latest: str | None = None, limit: int | None = None) -> list[dict]:
-    """Find windows when everyone is free. Optional limit is applied after search."""
+    """Find all free windows whose starts align to the slot grid.
+
+    Busy intervals are checked at minute precision with half-open semantics.
+    Candidate starts remain aligned to the 30-minute grid, while durations
+    such as 45 minutes are supported without rounding the requested end time.
+    """
     if not isinstance(attendees, list) or not attendees:
         raise ValueError("attendees must be a non-empty list of employee IDs")
     for person in attendees:
@@ -61,24 +64,36 @@ def find_free_slots(store: Store, attendees: list[str], date: str,
 
     earliest_minutes = time_to_minutes(earliest) if earliest is not None else 9 * 60
     latest_minutes = time_to_minutes(latest) if latest is not None else 17 * 60
-    if earliest_minutes >= latest_minutes:
+    day_start, day_end = 9 * 60, 17 * 60
+    earliest_minutes = max(earliest_minutes, day_start)
+    latest_minutes = min(latest_minutes, day_end)
+    if earliest_minutes >= latest_minutes or duration_minutes > latest_minutes - earliest_minutes:
         return []
-    earliest_clock = f"{earliest_minutes // 60:02d}:{earliest_minutes % 60:02d}"
-    latest_clock = f"{latest_minutes // 60:02d}:{latest_minutes % 60:02d}"
-    start_slot = max(0, min(SLOTS_PER_DAY, time_to_slot_ceil(earliest_clock)))
-    end_slot = max(0, min(SLOTS_PER_DAY, time_to_slot(latest_clock)))
 
-    calendars = [availability_from_busy(store.calendars.get(person, {}).get(date, []))
-                 for person in attendees]
-    free = combine_availability(calendars)
-    # Slots are the availability granularity, so reserve every slot touched by
-    # the requested duration. Return the exact requested end time, not a rounded
-    # duration, after the conservative slot check succeeds.
-    slots_needed = (duration_minutes + SLOT_MINUTES - 1) // SLOT_MINUTES
-    starts = find_free_windows(free, slots_needed, start_slot, end_slot)
-    slots = [{"start": slot_to_time(start),
-              "end": minutes_to_time(9 * 60 + start * SLOT_MINUTES + duration_minutes)}
-             for start in starts]
+    # Starts are fixed-size slot boundaries. Exact interval checks avoid
+    # rejecting a 13:00-13:45 meeting merely because another event starts at 13:45.
+    first_start = day_start + ((earliest_minutes - day_start + SLOT_MINUTES - 1) // SLOT_MINUTES) * SLOT_MINUTES
+    busy_by_attendee = [store.calendars.get(person, {}).get(date, []) for person in attendees]
+    slots = []
+    for start in range(first_start, latest_minutes - duration_minutes + 1, SLOT_MINUTES):
+        end = start + duration_minutes
+        if end > day_end:
+            continue
+        blocked = False
+        for busy_blocks in busy_by_attendee:
+            for block in busy_blocks:
+                busy_start = time_to_minutes(block["start"])
+                busy_end = time_to_minutes(block["end"])
+                if busy_end <= busy_start:
+                    raise ValueError("Busy block end must be after its start")
+                # Half-open intervals: touching endpoints are not overlaps.
+                if start < busy_end and busy_start < end:
+                    blocked = True
+                    break
+            if blocked:
+                break
+        if not blocked:
+            slots.append({"start": minutes_to_time(start), "end": minutes_to_time(end)})
     return slots[:limit] if limit is not None else slots
 
 

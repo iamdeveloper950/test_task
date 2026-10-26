@@ -21,7 +21,8 @@ def test_agent_calls_tool_and_returns_result_to_model():
 
     answer = agent.run("Find an hour for Priya and Sam on Tuesday afternoon")
 
-    assert answer == "13:00 works for both."
+    assert answer.startswith("Verified available 60-minute meeting options for Priya Raman, Sam Okafor")
+    assert "13:00–14:00" in answer
     second_call = model.calls[1]
     assert second_call[-1]["role"] == "tool"
     assert {"start": "13:00", "end": "14:00"} in json.loads(second_call[-1]["content"])
@@ -88,7 +89,10 @@ def test_agent_rejects_time_not_present_in_verified_slots():
         final("13:00 works for both, or 14:30 if you prefer."),
     ])
     answer = SchedulingAgent(model, Store.load()).run("Find an hour for Priya and Sam")
-    assert "couldn't verify every proposed meeting time" in answer
+    # The model's unsupported alternative is never surfaced; output is rendered
+    # from the validated availability result instead.
+    assert "14:30" not in answer
+    assert "13:00–14:00" in answer
 
 
 def test_agent_rejects_time_range_not_returned_as_a_complete_window():
@@ -98,7 +102,8 @@ def test_agent_rejects_time_range_not_returned_as_a_complete_window():
         final("13:00 to 15:00 works for both."),
     ])
     answer = SchedulingAgent(model, Store.load()).run("Find an hour for Priya and Sam")
-    assert "couldn't verify that complete meeting time" in answer
+    assert "13:00–14:00" in answer
+    assert "13:00–15:00" not in answer
 
 
 def test_agent_rejects_invented_person_after_valid_availability_check():
@@ -108,7 +113,8 @@ def test_agent_rejects_invented_person_after_valid_availability_check():
         final("Bob is available at 13:00."),
     ])
     answer = SchedulingAgent(model, Store.load()).run("Find an hour for Priya and Sam")
-    assert "couldn't verify a named attendee" in answer
+    assert "Bob" not in answer
+    assert "Priya Raman, Sam Okafor" in answer
 
 
 def test_agent_rejects_directory_person_not_in_checked_meeting():
@@ -118,7 +124,8 @@ def test_agent_rejects_directory_person_not_in_checked_meeting():
         final("Priya, Sam, and Dana are available at 13:00."),
     ])
     answer = SchedulingAgent(model, Store.load()).run("Find an hour for Priya and Sam")
-    assert "doesn't belong" in answer or "checked meeting" in answer
+    assert "Dana" not in answer
+    assert "Priya Raman, Sam Okafor" in answer
 
 
 def test_agent_rejects_start_and_end_from_different_windows():
@@ -128,7 +135,8 @@ def test_agent_rejects_start_and_end_from_different_windows():
         final("09:00 to 12:00 is available."),
     ])
     answer = SchedulingAgent(model, Store.load()).run("Find a meeting with Sam")
-    assert "couldn't verify that complete meeting time" in answer
+    assert "09:00 to 12:00" not in answer
+    assert "09:30–10:00" in answer
 
 
 def test_agent_handles_model_exception():
@@ -147,7 +155,10 @@ def test_agent_accepts_exact_verified_start_end_pair():
         final("Priya and Sam are available from 13:00 to 14:00."),
     ])
     answer = SchedulingAgent(model, Store.load()).run("Find an hour for Priya and Sam")
-    assert answer == "Priya and Sam are available from 13:00 to 14:00."
+    assert answer == (
+        "Verified available 60-minute meeting options for Priya Raman, Sam Okafor "
+        "on 2026-11-03: 13:00–14:00, 16:00–17:00."
+    )
 
 
 def test_agent_rejects_endpoints_from_different_valid_windows():
@@ -157,7 +168,8 @@ def test_agent_rejects_endpoints_from_different_valid_windows():
         final("09:30 to 12:00 is available."),
     ])
     answer = SchedulingAgent(model, Store.load()).run("Find a meeting with Sam")
-    assert "couldn't verify that complete meeting time" in answer
+    assert "09:30–12:00" not in answer
+    assert "09:30–10:00" in answer
 
 
 def test_agent_rejects_unverified_attendee_even_when_time_is_valid():
@@ -167,7 +179,8 @@ def test_agent_rejects_unverified_attendee_even_when_time_is_valid():
         final("Priya, Sam, and Dana are available from 13:00 to 14:00."),
     ])
     answer = SchedulingAgent(model, Store.load()).run("Find an hour for Priya and Sam")
-    assert "couldn't verify" in answer
+    assert "Dana" not in answer
+    assert "Priya Raman, Sam Okafor" in answer
 
 
 def test_malformed_tool_result_is_not_used_as_availability_evidence(monkeypatch):
@@ -219,7 +232,8 @@ def test_agent_rejects_unknown_person_claimed_as_attending():
         final("Priya and Sam are available from 13:00 to 14:00. Bob will attend."),
     ])
     answer = SchedulingAgent(model, Store.load()).run("Find an hour for Priya and Sam")
-    assert "couldn't verify a named attendee" in answer
+    assert "Bob" not in answer
+    assert "Priya Raman, Sam Okafor" in answer
 
 
 def test_failed_later_availability_query_clears_previous_evidence(monkeypatch):
@@ -243,3 +257,31 @@ def test_failed_later_availability_query_clears_previous_evidence(monkeypatch):
     ])
     answer = SchedulingAgent(model, Store.load()).run("Find a meeting")
     assert "can't confirm a meeting" in answer or "couldn't verify" in answer
+
+
+def test_agent_never_uses_free_form_final_to_add_attendee_in_unusual_wording():
+    model = FakeModel([
+        tool_call("find_free_slots", attendees=["priya", "sam"],
+                  date="2026-11-03", duration_minutes=60, earliest="12:00"),
+        final("Priya and Sam have a slot at 13:00. Bob will be in attendance."),
+    ])
+    answer = SchedulingAgent(model, Store.load()).run("Find an hour for Priya and Sam")
+    assert "Bob" not in answer
+    assert "Priya Raman, Sam Okafor" in answer
+
+
+def test_agent_rejects_tool_window_that_overlaps_busy_calendar(monkeypatch):
+    from scheduler import agent as agent_module
+
+    monkeypatch.setitem(
+        agent_module.TOOLS, "find_free_slots",
+        lambda store, **kwargs: [{"start": "09:00", "end": "10:00"}],
+    )
+    model = FakeModel([
+        tool_call("find_free_slots", attendees=["sam"],
+                  date="2026-11-03", duration_minutes=60),
+        final("Sam is available from 09:00 to 10:00."),
+    ])
+    answer = SchedulingAgent(model, Store.load()).run("Find an hour with Sam")
+    assert "can't confirm a meeting" in answer
+    assert "09:00–10:00" not in answer

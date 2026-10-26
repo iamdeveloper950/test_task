@@ -54,3 +54,10 @@ export LLM_BASE_URL=http://localhost:11434/v1
 export LLM_MODEL=llama3.1
 python main.py "Find 30 minutes with Mei and Luis on Tuesday"
 ```
+
+
+## Safety behavior
+
+- Meeting starts are aligned to the 30-minute grid, while busy intervals are checked at minute precision with half-open interval semantics. Durations such as 45 minutes are supported without rounding the requested end time.
+- After a successful availability query, the agent renders confirmations from validated calendar results rather than repeating free-form model claims.
+- Model calls have a configurable wait timeout and the agent loop has a maximum turn count. A timed-out synchronous model call cannot be forcibly stopped by Python; its daemon worker may continue until the call returns.

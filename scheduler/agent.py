@@ -79,6 +79,11 @@ class SchedulingAgent:
     ) -> str | None:
         """Return a safe failure message if the final answer overclaims evidence."""
         claims_availability = bool(_POSITIVE_AVAILABILITY_RE.search(answer))
+        if not availability_checked and re.search(
+            r"\b(meet(?:ing)?|attend\w*|participant\w*|invite\w*|calendar|available|free|schedule\w*)\b",
+            answer, re.IGNORECASE,
+        ):
+            return "I can't confirm a meeting until I check the attendees' calendars. Please try again."
         if claims_availability and not availability_checked:
             return "I can't confirm a meeting until I check the attendees' calendars. Please try again."
         if claims_availability and not verified_windows:
@@ -134,6 +139,38 @@ class SchedulingAgent:
 
         return None
 
+    def _render_verified_result(
+        self, attendees: list[str], meeting_date: str, duration_minutes: int,
+        windows: list[tuple[str, str]],
+    ) -> str:
+        """Render schedule confirmations from trusted data, never model prose."""
+        people_by_id = {
+            person["id"]: person for person in self.store.people
+            if isinstance(person, dict) and isinstance(person.get("id"), str)
+        }
+        display_names = [people_by_id[person_id].get("name", person_id) for person_id in attendees]
+        attendee_text = ", ".join(display_names)
+        if not windows:
+            return (f"I couldn't find an available {duration_minutes}-minute meeting for "
+                    f"{attendee_text} on {meeting_date} within the requested time bounds.")
+        options = ", ".join(f"{start}–{end}" for start, end in windows)
+        return (f"Verified available {duration_minutes}-minute meeting options for "
+                f"{attendee_text} on {meeting_date}: {options}.")
+
+    def _window_is_free(self, attendees: list[str], meeting_date: str,
+                        start_minutes: int, end_minutes: int) -> bool:
+        """Independently check an interval against the source calendars."""
+        from .slots import time_to_minutes
+        for attendee in attendees:
+            for block in self.store.calendars.get(attendee, {}).get(meeting_date, []):
+                busy_start = time_to_minutes(block["start"])
+                busy_end = time_to_minutes(block["end"])
+                if busy_end <= busy_start:
+                    return False
+                if start_minutes < busy_end and busy_start < end_minutes:
+                    return False
+        return True
+
     def run(self, user_request: str) -> str:
         """Handle one request and return a controlled message for invalid model output."""
         messages = [
@@ -143,6 +180,9 @@ class SchedulingAgent:
         verified_windows: dict[tuple[str, str], set[str]] = {}
         last_verified_attendees: set[str] = set()
         availability_checked = False
+        verified_attendee_ids: list[str] = []
+        verified_date = ""
+        verified_duration = 0
         for _ in range(self.max_turns):
             try:
                 raw = self._complete_with_timeout(messages)
@@ -157,6 +197,13 @@ class SchedulingAgent:
             if set(action) == {"final"}:
                 if not isinstance(action["final"], str):
                     return "Sorry, I received an invalid final response. Please try again."
+                # Once a calendar query has succeeded, never let free-form model
+                # prose make the confirmation. Render only the verified query data.
+                if availability_checked:
+                    ordered_windows = sorted(verified_windows.keys(), key=lambda pair: pair[0])
+                    return self._render_verified_result(
+                        verified_attendee_ids, verified_date, verified_duration, ordered_windows
+                    )
                 failure = self._validate_final_answer(
                     action["final"], verified_windows, last_verified_attendees, availability_checked
                 )
@@ -183,21 +230,44 @@ class SchedulingAgent:
                 if tool_name == "find_free_slots":
                     validated_windows: dict[tuple[str, str], set[str]] = {}
                     attendees = args.get("attendees")
-                    if not isinstance(attendees, list) or not attendees:
+                    if not isinstance(attendees, list) or not attendees or any(not isinstance(item, str) for item in attendees):
                         raise ValueError("Tool returned results for invalid attendees")
+                    known_ids = set(self._directory_names().values())
+                    if any(attendee not in known_ids for attendee in attendees):
+                        raise UnknownPersonError("Unknown attendee in availability request")
+                    meeting_date = args.get("date")
+                    duration = args.get("duration_minutes")
+                    if not isinstance(meeting_date, str):
+                        raise ValueError("Availability query has an invalid date")
+                    if not isinstance(duration, int) or isinstance(duration, bool) or duration <= 0:
+                        raise ValueError("Availability query has an invalid duration")
                     from .slots import time_to_minutes
+                    earliest = args.get("earliest")
+                    latest = args.get("latest")
+                    earliest_minutes = time_to_minutes(earliest) if earliest is not None else 9 * 60
+                    latest_minutes = time_to_minutes(latest) if latest is not None else 17 * 60
                     for window in result:
-                        if not isinstance(window, dict) or not {"start", "end"}.issubset(window):
+                        if not isinstance(window, dict) or not isinstance(window.get("start"), str) or not isinstance(window.get("end"), str):
                             raise ValueError("Tool returned a malformed meeting window")
                         start, end = window["start"], window["end"]
                         start_minutes, end_minutes = time_to_minutes(start), time_to_minutes(end)
                         if not (9 * 60 <= start_minutes < end_minutes <= 17 * 60):
                             raise ValueError("Tool returned a meeting outside working hours")
+                        if end_minutes - start_minutes != duration:
+                            raise ValueError("Tool returned a meeting with the wrong duration")
+                        if (start_minutes - 9 * 60) % 30 != 0:
+                            raise ValueError("Tool returned a meeting off the supported start grid")
+                        if start_minutes < earliest_minutes or end_minutes > latest_minutes:
+                            raise ValueError("Tool returned a meeting outside the requested bounds")
+                        if not self._window_is_free(attendees, meeting_date, start_minutes, end_minutes):
+                            raise ValueError("Tool returned a meeting that overlaps an attendee's busy time")
                         validated_windows[(start, end)] = set(attendees)
-                    # A new availability query replaces the previous evidence;
-                    # the final answer must be grounded in one coherent result.
+                    # A new availability query replaces previous evidence.
                     verified_windows = validated_windows
                     last_verified_attendees = set(attendees)
+                    verified_attendee_ids = list(dict.fromkeys(attendees))
+                    verified_date = meeting_date
+                    verified_duration = duration
                     availability_checked = True
             except UnknownPersonError:
                 return ("I couldn't find one or more requested attendees in the employee "

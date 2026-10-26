@@ -86,3 +86,35 @@ def test_malformed_date_is_rejected():
 
     with pytest.raises(ValueError, match="valid date"):
         find_free_slots(Store.load(), ["sam"], "2026-02-30", 30)
+
+
+def test_45_minute_meeting_can_end_exactly_when_busy_event_starts():
+    store = Store.load()
+    store.calendars["priya"]["2026-11-03"].append(
+        {"start": "13:45", "end": "14:00", "title": "Next meeting"}
+    )
+    slots = find_free_slots(
+        store, ["priya", "sam"], "2026-11-03", 45,
+        earliest="13:00", latest="13:45",
+    )
+    assert slots == [{"start": "13:00", "end": "13:45"}]
+
+
+def test_45_minute_meeting_is_rejected_if_busy_event_starts_before_it_ends():
+    store = Store.load()
+    store.calendars["priya"]["2026-11-03"].append(
+        {"start": "13:44", "end": "14:00", "title": "Next meeting"}
+    )
+    slots = find_free_slots(
+        store, ["priya", "sam"], "2026-11-03", 45,
+        earliest="13:00", latest="13:45",
+    )
+    assert slots == []
+
+
+def test_45_minute_meeting_can_finish_exactly_at_workday_boundary():
+    slots = find_free_slots(
+        Store.load(), ["sam"], "2026-11-04", 45,
+        earliest="16:00", latest="17:00",
+    )
+    assert slots == [{"start": "16:00", "end": "16:45"}]

@@ -8,12 +8,13 @@
 - **Bounds and inputs were not validated.** Added validation for clock values, dates, duration, optional result limits, and inconsistent availability inputs. Earliest bounds are aligned inward so results cannot start before the requested time.
 - **The agent trusted every model response.** Added checks for malformed JSON, unexpected response shapes, unknown tools, invalid arguments, and tool errors. Unknown-person errors stop the request instead of allowing a later model response to quietly proceed.
 - **The agent loop was unbounded.** Added a configurable maximum number of turns and a controlled message when the limit is reached.
-- **Final answers could claim unverified times.** The agent now requires a calendar availability check before accepting a positive availability claim and checks mentioned clock times against verified window boundaries.
+- **Final answers could claim unverified times or attendees.** The agent now validates complete start/end pairs against an exact window returned by the most recent availability query, checks proposed start times, and rejects known or likely named attendees who were not in the verified attendee set. Malformed tool results are not accepted as availability evidence. These checks are deliberately conservative: ambiguous phrasing returns a safe failure rather than an unsupported confirmation.
+- **A model call could block indefinitely.** The agent now bounds each synchronous model call with a configurable timeout; the OpenAI-compatible HTTP adapter also passes its timeout to `urlopen`. A timed-out Python thread cannot be forcibly killed, so the worker is daemonized and further calls on that agent are rejected while the timed-out call remains stuck.
 
 ## My addition
 
 - Added an optional `limit` argument to `find_free_slots`. It is applied only after all matching windows are computed and ordered, so default behavior still returns every valid window. This helps callers request a concise shortlist without silently truncating normal results.
-- Added tests for result limiting, ordering, unknown attendees, duration handling, malformed model output, invalid tools, and loop termination.
+- Added tests for result limiting, ordering, unknown attendees, duration handling, malformed model/tool responses, exact time-range verification, unverified attendee claims, working-day boundaries, model-call timeouts, and loop termination.
 
 ## How I used AI tools
 
@@ -23,8 +24,8 @@
 ## What I would do next
 
 - Add property-based tests for combinations of busy intervals, duration lengths, and day boundaries.
-- Strengthen final-answer validation so it can verify complete start/end pairs and every attendee name, rather than only checking clock times against verified window boundaries.
-- Add a tool execution timeout if tools become blocking or perform network I/O.
+- Improve natural-language entity detection beyond common attendee-claim patterns; free-text name detection cannot guarantee perfect coverage for every phrasing.
+- Add per-tool execution timeouts if tools become blocking or perform network I/O.
 
 ## Deliberately left alone
 

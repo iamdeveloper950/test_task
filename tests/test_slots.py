@@ -44,3 +44,30 @@ def test_free_window_rejects_zero_duration():
 
     with pytest.raises(ValueError):
         find_free_windows([True, True], 0)
+
+
+def test_busy_event_outside_working_day_does_not_block_slots():
+    assert all(availability_from_busy([
+        {"start": "08:00", "end": "09:00"},
+        {"start": "17:00", "end": "18:00"},
+    ]))
+
+
+def test_busy_event_touching_working_day_boundary_is_clipped():
+    free = availability_from_busy([{"start": "08:30", "end": "09:15"}])
+    assert free[0] is False
+    assert free[1] is True
+
+
+def test_invalid_busy_interval_is_rejected():
+    import pytest
+
+    with pytest.raises(ValueError, match="after its start"):
+        availability_from_busy([{"start": "10:30", "end": "10:00"}])
+
+
+def test_invalid_clock_is_rejected():
+    import pytest
+
+    with pytest.raises(ValueError, match="HH:MM"):
+        time_to_slot("25:90")

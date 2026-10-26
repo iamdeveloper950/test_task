@@ -16,7 +16,10 @@ import urllib.request
 
 
 class OpenAICompatibleModel:
-    def __init__(self):
+    def __init__(self, timeout_seconds: float = 30.0):
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        self.timeout_seconds = timeout_seconds
         self.base_url = os.environ["LLM_BASE_URL"].rstrip("/")
         self.api_key = os.environ.get("LLM_API_KEY", "")
         self.model = os.environ["LLM_MODEL"]
@@ -39,6 +42,6 @@ class OpenAICompatibleModel:
                 "Authorization": f"Bearer {self.api_key}",
             },
         )
-        with urllib.request.urlopen(request) as response:
+        with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
             payload = json.load(response)
         return payload["choices"][0]["message"]["content"]

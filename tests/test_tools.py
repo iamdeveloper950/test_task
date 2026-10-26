@@ -68,3 +68,21 @@ def test_earliest_bound_does_not_return_earlier_start():
                             earliest="13:15", latest="14:00")
     assert slots
     assert all(slot["start"] >= "13:30" for slot in slots)
+
+
+def test_latest_working_day_boundary_includes_final_half_hour():
+    slots = find_free_slots(Store.load(), ["priya", "sam"], "2026-11-03", 30,
+                            earliest="16:30", latest="17:00")
+    assert slots == [{"start": "16:30", "end": "17:00"}]
+
+
+def test_latest_before_earliest_returns_no_slots():
+    assert find_free_slots(Store.load(), ["sam"], "2026-11-03", 30,
+                           earliest="14:00", latest="13:00") == []
+
+
+def test_malformed_date_is_rejected():
+    import pytest
+
+    with pytest.raises(ValueError, match="valid date"):
+        find_free_slots(Store.load(), ["sam"], "2026-02-30", 30)
